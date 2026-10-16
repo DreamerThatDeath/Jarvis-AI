@@ -1,25 +1,19 @@
 
 {
-  "id": "./",
+  "id": "/",
   "name": "Jarvis AI",
   "short_name": "Jarvis",
   "description": "Your personal AI assistant",
-  "start_url": "./",
-  "scope": "./",
+  "start_url": "/",
+  "scope": "/",
   "display": "standalone",
   "orientation": "any",
   "background_color": "#0a0a0a",
   "theme_color": "#0a0a0a",
   "icons": [
     {
-      "src": "./img/jarvis-logo.png",
-      "sizes": "192x192",
-      "type": "image/png",
-      "purpose": "any"
-    },
-    {
-      "src": "./img/jarvis-logo.png",
-      "sizes": "512x512",
+      "src": "/img/jarvis-logo.png",
+      "sizes": "any",
       "type": "image/png",
       "purpose": "any"
     }
