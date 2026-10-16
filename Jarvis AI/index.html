@@ -682,7 +682,6 @@ footer {
     <div id="chat-history"><div class="empty-note" data-i18n="noHistory">Belum ada riwayat chat.</div></div>
 
     <div class="sidebar-bottom">
-      <!-- Tombol Settings dihilangkan, fungsinya pindah ke titik tiga -->
       <button id="login-button">
         <div class="login-avatar" id="login-avatar">?</div>
         <div class="login-info">
@@ -704,17 +703,15 @@ footer {
       <option value="id">Indonesia</option>
       <option value="en">English</option>
     </select>
-    <label class="settings-label">Mode AI</label>
+    <label class="settings-label" id="voice-label">Suara Jarvis</label>
     <select id="mode-select">
-      <option value="ramah">Ramah</option>
-      <option value="tsundere">Tsundere</option>
-      <option value="toxic">Toxic</option>
+      <option value="cowok">Cowok</option>
+      <option value="cewek">Cewek</option>
     </select>
     <div class="settings-note" data-i18n="settingsNote">
       Bahasa mengubah teks antarmuka, pengenalan suara, dan suara jawaban Jarvis.
-      Mode mengubah gaya bicara AI. Powered by Jarvis 1.0.
+      Powered by Jarvis 1.0.
     </div>
-    <button class="download-app-btn" id="download-app">Download App</button>
   </section>
 
   <section id="login-panel">
@@ -812,7 +809,7 @@ let chats = [];
 let currentChat = null;
 let nextChatId = 1;
 let pinnedChats = new Set();
-let currentMode = "ramah";
+let currentMode = "cowok";
 let isLoggedIn = false;
 let currentUser = null;
 let pendingFile = null;
@@ -822,7 +819,7 @@ const translations = {
     menu: "Menu", newChat: "Chat Baru", totalChats: "Total Chat", images: "Gambar & Video",
     pinned: "Pinned Chat", chatHistory: "Riwayat Chat", noHistory: "Belum ada riwayat chat.",
     settings: "Settings", language: "Bahasa Jarvis",
-    settingsNote: "Bahasa mengubah teks antarmuka, pengenalan suara, dan suara jawaban Jarvis. Mode mengubah gaya bicara AI. Powered by Jarvis 1.0.",
+    settingsNote: "Bahasa mengubah teks antarmuka, pengenalan suara, dan suara jawaban Jarvis. Powered by Jarvis 1.0.",
     placeholder: "Tanyakan sesuatu",
     welcome: "Halo, ada yang bisa<br>kubantu?",
     description: "Jarvis AI • Asisten Personal Kamu",
@@ -851,7 +848,7 @@ const translations = {
     menu: "Menu", newChat: "New Chat", totalChats: "Total Chats", images: "Images & Videos",
     pinned: "Pinned Chats", chatHistory: "Chat History", noHistory: "No chat history yet.",
     settings: "Settings", language: "Jarvis Language",
-    settingsNote: "Language changes interface, speech recognition and voice. Mode changes AI personality. Powered by Jarvis 1.0.",
+    settingsNote: "Language changes interface, speech recognition and voice. Powered by Jarvis 1.0.",
     placeholder: "Ask something",
     welcome: "Hello, how can<br>I help you?",
     description: "Jarvis AI • Your Personal assistent",
@@ -895,6 +892,19 @@ function applyLanguage() {
   });
   promptBox.placeholder = t("placeholder");
   $("language-select").value = language;
+  // Update Suara Jarvis label and options based on language
+  const voiceLabel = $("voice-label");
+  const modeSelect = $("mode-select");
+  if (language === "en") {
+    if (voiceLabel) voiceLabel.textContent = "Jarvis Voice";
+    modeSelect.options[0].text = "Male";
+    modeSelect.options[1].text = "Female";
+  } else {
+    if (voiceLabel) voiceLabel.textContent = "Suara Jarvis";
+    modeSelect.options[0].text = "Cowok";
+    modeSelect.options[1].text = "Cewek";
+  }
+  modeSelect.value = currentMode;
   renderMessages();
   updateHistory();
   if (recognition) recognition.lang = language === "id" ? "id-ID" : "en-US";
@@ -957,7 +967,7 @@ document.addEventListener("keydown", e => {
 
 /* ===== SETTINGS DIPINDAH KE TITIK TIGA ===== */
 $("login-dots").onclick = (e) => {
-  e.stopPropagation(); // biar tidak trigger login-button
+  e.stopPropagation();
   $("settings-panel").classList.add("show");
   closeMenu();
 };
@@ -975,13 +985,9 @@ $("mode-select").onchange = e => {
   currentMode = e.target.value;
   localStorage.setItem("jarvis-mode", currentMode);
 };
-currentMode = localStorage.getItem("jarvis-mode") || "ramah";
+currentMode = localStorage.getItem("jarvis-mode") || "cowok";
+if (currentMode !== "cowok" && currentMode !== "cewek") currentMode = "cowok";
 $("mode-select").value = currentMode;
-
-$("download-app").onclick = () => {
-  if (window.deferredPrompt) window.deferredPrompt.prompt();
-  else alert(language === "id" ? "Tambahkan ke Home Screen lewat menu browser." : "Add to Home Screen via browser menu.");
-};
 
 /* Login */
 function updateLoginUI() {
@@ -998,7 +1004,6 @@ function updateLoginUI() {
 }
 
 $("login-button").onclick = (e) => {
-  // Kalau klik di titik tiga, sudah di-handle terpisah
   if (e.target.closest("#login-dots")) return;
 
   if (isLoggedIn) {
@@ -1056,7 +1061,19 @@ function speakJarvis(text) {
   const u = new SpeechSynthesisUtterance(clean);
   u.lang = language === "id" ? "id-ID" : "en-US";
   const voices = speechSynthesis.getVoices();
-  const preferred = voices.find(v => v.lang.toLowerCase().startsWith(language === "id" ? "id" : "en"));
+  const langPrefix = language === "id" ? "id" : "en";
+  let preferred = null;
+  if (currentMode === "cewek") {
+    preferred = voices.find(v => v.lang.toLowerCase().startsWith(langPrefix) && (
+      /female|woman|zira|samantha|karen|moira|tessa|veena|fiona|victoria|susan|hazel|linda|heather|amy|emma|olivia|sophia/i.test(v.name)
+    ));
+    if (!preferred) preferred = voices.find(v => v.lang.toLowerCase().startsWith(langPrefix) && !/male|man|david|mark|daniel|alex|tom|james|john|michael/i.test(v.name));
+  } else {
+    preferred = voices.find(v => v.lang.toLowerCase().startsWith(langPrefix) && (
+      /male|man|david|mark|daniel|alex|tom|james|john|michael|george|fred|ravi|thomas/i.test(v.name)
+    ));
+    if (!preferred) preferred = voices.find(v => v.lang.toLowerCase().startsWith(langPrefix));
+  }
   if (preferred) u.voice = preferred;
   speechSynthesis.speak(u);
 }
@@ -1444,7 +1461,7 @@ composer.addEventListener("submit", async e => {
       form.append("message", question);
       form.append("mode", currentMode);
       form.append("language", language);
-      form.append("model", "gpt-6-astra"); // request model khusus
+      form.append("model", "gpt-6-astra");
       form.append("file", fileToSend);
       body = form;
       headers = {};
@@ -1453,8 +1470,8 @@ composer.addEventListener("submit", async e => {
         message: question,
         mode: currentMode,
         language,
-        model: "gpt-6-astra", // GPT-6 Astra unlimited
-        generate_media: true   // izinkan generate foto/video
+        model: "gpt-6-astra",
+        generate_media: true
       });
       headers = { "Content-Type": "application/json" };
     }
@@ -1467,7 +1484,6 @@ composer.addEventListener("submit", async e => {
 
     answerMessage.text = data.reply;
 
-    // Support image & video generation
     if (data.image) addGeneratedMedia(data.image, question, "image");
     if (data.video) addGeneratedMedia(data.video, question, "video");
   } catch (err) {
@@ -1510,4 +1526,4 @@ if ("serviceWorker" in navigator) {
 }
 </script>
 </body>
-</html>
+  </html>
