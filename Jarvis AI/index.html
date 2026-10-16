@@ -1044,46 +1044,127 @@ try {
 } catch(e) {}
 updateLoginUI();
 
-/* Voice */
+/* ===== JARVIS VOICE: DEEP MALE + CLEAR SPEECH ===== */
 const voiceToggle = $("voice-toggle");
-let voiceEnabled = localStorage.getItem("jarvis-voice-enabled") !== "false";
+
+let voiceEnabled =
+  localStorage.getItem("jarvis-voice-enabled") !== "false";
+
 function updateVoiceButton() {
   voiceToggle.textContent = voiceEnabled ? "🔊" : "🔇";
+  voiceToggle.title = voiceEnabled
+    ? "Matikan suara Jarvis"
+    : "Aktifkan suara Jarvis";
 }
+
 function stopJarvisVoice() {
-  if ("speechSynthesis" in window) speechSynthesis.cancel();
-}
-function speakJarvis(text) {
-  if (!voiceEnabled || !text || !("speechSynthesis" in window)) return;
-  stopJarvisVoice();
-  const clean = String(text).replace(/```[\s\S]*?```/g, " ").replace(/https?:\/\/\S+/g, " ").trim();
-  if (!clean) return;
-  const u = new SpeechSynthesisUtterance(clean);
-  u.lang = language === "id" ? "id-ID" : "en-US";
-  const voices = speechSynthesis.getVoices();
-  const langPrefix = language === "id" ? "id" : "en";
-  let preferred = null;
-  if (currentMode === "cewek") {
-    preferred = voices.find(v => v.lang.toLowerCase().startsWith(langPrefix) && (
-      /female|woman|zira|samantha|karen|moira|tessa|veena|fiona|victoria|susan|hazel|linda|heather|amy|emma|olivia|sophia/i.test(v.name)
-    ));
-    if (!preferred) preferred = voices.find(v => v.lang.toLowerCase().startsWith(langPrefix) && !/male|man|david|mark|daniel|alex|tom|james|john|michael/i.test(v.name));
-  } else {
-    preferred = voices.find(v => v.lang.toLowerCase().startsWith(langPrefix) && (
-      /male|man|david|mark|daniel|alex|tom|james|john|michael|george|fred|ravi|thomas/i.test(v.name)
-    ));
-    if (!preferred) preferred = voices.find(v => v.lang.toLowerCase().startsWith(langPrefix));
+  if ("speechSynthesis" in window) {
+    window.speechSynthesis.cancel();
   }
-  if (preferred) u.voice = preferred;
-  speechSynthesis.speak(u);
 }
+
+function getJarvisVoice() {
+  const voices = window.speechSynthesis.getVoices();
+  const langPrefix = language === "id" ? "id" : "en";
+
+  const maleNames =
+    /\b(male|man|david|daniel|alex|fred|george|james|john|michael|mark|thomas|ravi)\b/i;
+
+  const femaleNames =
+    /\b(female|woman|zira|samantha|karen|moira|tessa|veena|fiona|victoria|susan|hazel|linda|amy|emma|olivia|sophia)\b/i;
+
+  const languageVoices = voices.filter(v =>
+    v.lang.toLowerCase().startsWith(langPrefix)
+  );
+
+  if (currentMode === "cowok") {
+    const maleVoice = languageVoices.find(v =>
+      maleNames.test(v.name) && !femaleNames.test(v.name)
+    );
+
+    if (maleVoice) return maleVoice;
+  } else {
+    const femaleVoice = languageVoices.find(v =>
+      femaleNames.test(v.name)
+    );
+
+    if (femaleVoice) return femaleVoice;
+  }
+
+  return languageVoices.find(v => v.default) ||
+         languageVoices[0] ||
+         voices.find(v => v.default) ||
+         null;
+}
+
+function speakJarvis(text) {
+  if (
+    !voiceEnabled ||
+    !text ||
+    !("speechSynthesis" in window)
+  ) return;
+
+  stopJarvisVoice();
+
+  const clean = String(text)
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/https?:\/\/\S+/g, " ")
+    .replace(/[*_#`]/g, " ")
+    .trim();
+
+  if (!clean) return;
+
+  const utterance = new SpeechSynthesisUtterance(clean);
+
+  utterance.lang = language === "id" ? "id-ID" : "en-US";
+  utterance.volume = 1;
+
+  if (currentMode === "cowok") {
+    utterance.pitch = 0.72;
+    utterance.rate = 0.92;
+  } else {
+    utterance.pitch = 1.08;
+    utterance.rate = 0.96;
+  }
+
+  const selectedVoice = getJarvisVoice();
+
+  if (selectedVoice) {
+    utterance.voice = selectedVoice;
+  }
+
+  window.speechSynthesis.speak(utterance);
+}
+
+if ("speechSynthesis" in window) {
+  window.speechSynthesis.onvoiceschanged = () => {
+    window.speechSynthesis.getVoices();
+  };
+
+  window.speechSynthesis.getVoices();
+}
+
 updateVoiceButton();
+
 voiceToggle.onclick = () => {
   voiceEnabled = !voiceEnabled;
-  localStorage.setItem("jarvis-voice-enabled", String(voiceEnabled));
+
+  localStorage.setItem(
+    "jarvis-voice-enabled",
+    String(voiceEnabled)
+  );
+
   updateVoiceButton();
-  if (voiceEnabled) speakJarvis(t("voiceOn"));
-  else stopJarvisVoice();
+
+  if (voiceEnabled) {
+    speakJarvis(
+      language === "id"
+        ? "Suara Jarvis diaktifkan. Halo, ada yang bisa kubantu?"
+        : "Jarvis voice activated. Hello, how can I help you?"
+    );
+  } else {
+    stopJarvisVoice();
+  }
 };
 
 /* Mic */
