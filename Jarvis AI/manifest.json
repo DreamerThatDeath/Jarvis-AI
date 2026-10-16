@@ -2,7 +2,7 @@
 {
   "id": "/",
   "name": "Jarvis AI",
-  "short_name": "Jarvis",
+  "short_name": "JarvisApp",
   "description": "Your personal AI assistant",
   "start_url": "/",
   "scope": "/",
