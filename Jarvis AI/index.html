@@ -1604,8 +1604,9 @@ composer.addEventListener("submit", async e => {
     }
     if (data.video) addGeneratedMedia(data.video, question, "video");
   } catch (err) {
-    console.error(err);
-    answerMessage.text = t("connectionError");
+    console.error("Jarvis request failed:", err);
+    const detail = err && err.message ? err.message : "Unknown error";
+    answerMessage.text = t("connectionError") + "\n\n" + detail;
   } finally {
     composer.dataset.sending = "false";
     sendBtn.disabled = false;
