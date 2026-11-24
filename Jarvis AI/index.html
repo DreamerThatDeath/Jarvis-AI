@@ -1499,7 +1499,7 @@ function addGeneratedMedia(data, promptText, type = "image") {
 }
 
 /* Backend - GPT-6 Astra */
-const JARVIS_BACKEND_URL = "https://jarvis-ai-backend-iota.vercel.app/api/chat";
+const JARVIS_BACKEND_URL = "https://jarvis-ai-backend.dreamerthatdie.workers.dev/";
 
 composer.addEventListener("submit", async e => {
   e.preventDefault();
@@ -1552,7 +1552,11 @@ composer.addEventListener("submit", async e => {
         mode: currentMode,
         language,
         model: "gpt-6-astra",
-        generate_media: true
+        generate_media: true,
+        history: chat.messages.slice(0, -2)
+          .filter(item => (item.role === "user" || item.role === "assistant") && typeof item.text === "string")
+          .slice(-12)
+          .map(item => ({ role: item.role, text: item.text }))
       });
       headers = { "Content-Type": "application/json" };
     }
@@ -1592,8 +1596,8 @@ promptBox.addEventListener("keydown", e => {
 
 
 /* ===== REAL SPEECH-TO-SPEECH (GEMINI LIVE) ===== */
-const JARVIS_LIVE_TOKEN_URL = "https://jarvis-ai-backend-iota.vercel.app/api/live-token";
-const JARVIS_ANALYTICS_URL = "https://jarvis-analytics.dreamerthatdie.workers.dev/events/open";
+const JARVIS_LIVE_TOKEN_URL = "https://jarvis-ai-backend.dreamerthatdie.workers.dev/live-token";
+const JARVIS_ANALYTICS_URL = "https://jarvis-ai-backend.dreamerthatdie.workers.dev/events/open";
 
 function trackJarvisAppOpen() {
   const sessionId = (window.crypto && crypto.randomUUID)
@@ -1778,6 +1782,10 @@ async function startLiveConversation() {
     if (!navigator.mediaDevices?.getUserMedia || !window.WebSocket) {
       throw new Error(language === "id" ? "Browser ini belum mendukung STS." : "This browser does not support STS.");
     }
+
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    livePlaybackContext = new AudioContextClass({ sampleRate: 24000 });
+    await livePlaybackContext.resume();
 
     liveStream = await navigator.mediaDevices.getUserMedia({
       audio: {
