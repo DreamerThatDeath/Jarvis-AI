@@ -1590,6 +1590,333 @@ promptBox.addEventListener("keydown", e => {
   }
 });
 
+
+/* ===== REAL SPEECH-TO-SPEECH (GEMINI LIVE) ===== */
+const JARVIS_LIVE_TOKEN_URL = "https://jarvis-ai-backend-iota.vercel.app/api/live-token";
+const JARVIS_ANALYTICS_URL = "https://jarvis-analytics.dreamerthatdie.workers.dev/events/open";
+
+function trackJarvisAppOpen() {
+  const sessionId = (window.crypto && crypto.randomUUID)
+    ? crypto.randomUUID()
+    : "open-" + Date.now() + "-" + Math.random().toString(36).slice(2);
+  fetch(JARVIS_ANALYTICS_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      sessionId,
+      language,
+      platform: /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent) ? "mobile" : "web"
+    }),
+    keepalive: true
+  }).catch(() => {});
+}
+trackJarvisAppOpen();
+
+let liveSocket = null;
+let liveStream = null;
+let liveCaptureContext = null;
+let livePlaybackContext = null;
+let liveSource = null;
+let liveProcessor = null;
+let liveMuteNode = null;
+let liveReady = false;
+let liveStarting = false;
+let nextLivePlaybackTime = 0;
+let liveLastTranscriptRole = "";
+let liveUserTranscriptMessage = null;
+let liveAssistantTranscriptMessage = null;
+
+function resampleTo16k(input, inputRate) {
+  if (inputRate === 16000) {
+    const copy = new Float32Array(input.length);
+    copy.set(input);
+    return copy;
+  }
+  const ratio = inputRate / 16000;
+  const outputLength = Math.max(1, Math.floor(input.length / ratio));
+  const output = new Float32Array(outputLength);
+  for (let i = 0; i < outputLength; i++) {
+    const position = i * ratio;
+    const left = Math.floor(position);
+    const right = Math.min(left + 1, input.length - 1);
+    const fraction = position - left;
+    output[i] = input[left] * (1 - fraction) + input[right] * fraction;
+  }
+  return output;
+}
+
+function pcm16Base64(floatSamples) {
+  const pcm = new Int16Array(floatSamples.length);
+  for (let i = 0; i < floatSamples.length; i++) {
+    const sample = Math.max(-1, Math.min(1, floatSamples[i]));
+    pcm[i] = sample < 0 ? sample * 32768 : sample * 32767;
+  }
+  const bytes = new Uint8Array(pcm.buffer);
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary);
+}
+
+function appendLiveTranscript(role, text) {
+  if (!text || !currentChat) return;
+  if (role === "user") {
+    if (liveLastTranscriptRole !== "user" || !liveUserTranscriptMessage) {
+      liveUserTranscriptMessage = { role: "user", text: "" };
+      currentChat.messages.push(liveUserTranscriptMessage);
+    }
+    liveUserTranscriptMessage.text += text;
+  } else {
+    if (liveLastTranscriptRole !== "assistant" || !liveAssistantTranscriptMessage) {
+      liveAssistantTranscriptMessage = { role: "assistant", text: "", mode: currentMode };
+      currentChat.messages.push(liveAssistantTranscriptMessage);
+    }
+    liveAssistantTranscriptMessage.text += text;
+  }
+  liveLastTranscriptRole = role;
+  renderMessages();
+  updateHistory();
+}
+
+function playGeminiLiveAudio(base64Audio) {
+  if (!voiceEnabled || !base64Audio) return;
+  try {
+    if (!livePlaybackContext) {
+      livePlaybackContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
+    }
+    const binary = atob(base64Audio);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    const evenLength = bytes.length - (bytes.length % 2);
+    const pcm = new Int16Array(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + evenLength));
+    const audioBuffer = livePlaybackContext.createBuffer(1, pcm.length, 24000);
+    const channel = audioBuffer.getChannelData(0);
+    for (let i = 0; i < pcm.length; i++) channel[i] = pcm[i] / 32768;
+    const source = livePlaybackContext.createBufferSource();
+    source.buffer = audioBuffer;
+    source.connect(livePlaybackContext.destination);
+    const startAt = Math.max(livePlaybackContext.currentTime + 0.03, nextLivePlaybackTime);
+    source.start(startAt);
+    nextLivePlaybackTime = startAt + audioBuffer.duration;
+  } catch (error) {
+    console.error("Live audio playback error:", error);
+  }
+}
+
+function startLiveAudioCapture() {
+  if (!liveStream || !liveSocket || liveSocket.readyState !== WebSocket.OPEN) return;
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  liveCaptureContext = new AudioContextClass();
+  liveSource = liveCaptureContext.createMediaStreamSource(liveStream);
+  liveProcessor = liveCaptureContext.createScriptProcessor(4096, 1, 1);
+  liveMuteNode = liveCaptureContext.createGain();
+  liveMuteNode.gain.value = 0;
+
+  liveProcessor.onaudioprocess = event => {
+    if (!liveReady || !liveSocket || liveSocket.readyState !== WebSocket.OPEN) return;
+    const input = event.inputBuffer.getChannelData(0);
+    const pcm = resampleTo16k(input, liveCaptureContext.sampleRate);
+    liveSocket.send(JSON.stringify({
+      realtimeInput: {
+        audio: {
+          data: pcm16Base64(pcm),
+          mimeType: "audio/pcm;rate=16000"
+        }
+      }
+    }));
+  };
+
+  liveSource.connect(liveProcessor);
+  liveProcessor.connect(liveMuteNode);
+  liveMuteNode.connect(liveCaptureContext.destination);
+  liveCaptureContext.resume();
+}
+
+async function stopLiveConversation() {
+  liveReady = false;
+  liveStarting = false;
+  try {
+    if (liveSocket && liveSocket.readyState === WebSocket.OPEN) {
+      liveSocket.send(JSON.stringify({ realtimeInput: { audioStreamEnd: true } }));
+      liveSocket.close(1000, "User ended voice session");
+    }
+  } catch (error) {}
+  liveSocket = null;
+
+  if (liveProcessor) { try { liveProcessor.disconnect(); } catch (error) {} }
+  if (liveSource) { try { liveSource.disconnect(); } catch (error) {} }
+  if (liveMuteNode) { try { liveMuteNode.disconnect(); } catch (error) {} }
+  liveProcessor = null;
+  liveSource = null;
+  liveMuteNode = null;
+
+  if (liveStream) {
+    liveStream.getTracks().forEach(track => track.stop());
+    liveStream = null;
+  }
+  if (liveCaptureContext) {
+    try { await liveCaptureContext.close(); } catch (error) {}
+    liveCaptureContext = null;
+  }
+  if (livePlaybackContext) {
+    try { await livePlaybackContext.close(); } catch (error) {}
+    livePlaybackContext = null;
+  }
+
+  nextLivePlaybackTime = 0;
+  liveLastTranscriptRole = "";
+  liveUserTranscriptMessage = null;
+  liveAssistantTranscriptMessage = null;
+  updateMicUI(false);
+  micButton.title = language === "id" ? "Mulai percakapan suara" : "Start voice conversation";
+}
+
+async function startLiveConversation() {
+  if (liveStarting) return;
+  liveStarting = true;
+  micButton.disabled = true;
+  try {
+    if (!navigator.mediaDevices?.getUserMedia || !window.WebSocket) {
+      throw new Error(language === "id" ? "Browser ini belum mendukung STS." : "This browser does not support STS.");
+    }
+
+    liveStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        channelCount: 1,
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true
+      }
+    });
+
+    const tokenResponse = await fetch(JARVIS_LIVE_TOKEN_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ voice: currentMode, language })
+    });
+    const tokenData = await tokenResponse.json().catch(() => ({}));
+    if (!tokenResponse.ok || !tokenData.token) {
+      throw new Error(tokenData.error || "Could not create Gemini Live session.");
+    }
+
+    const socketUrl = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained?access_token=" + encodeURIComponent(tokenData.token);
+    liveSocket = new WebSocket(socketUrl);
+
+    liveSocket.onopen = () => {
+      liveSocket.send(JSON.stringify({
+        setup: {
+          model: "models/gemini-3.8-live",
+          responseModalities: ["AUDIO"],
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: { voiceName: tokenData.voice || (currentMode === "cewek" ? "Kore" : "Fenrir") }
+            }
+          },
+          inputAudioTranscription: {},
+          outputAudioTranscription: {},
+          systemInstruction: {
+            parts: [{
+              text: language === "id"
+                ? "Kamu adalah Jarvis, asisten AI pribadi yang ramah, cerdas, dan responsif. Jawab dalam Bahasa Indonesia secara alami, ringkas, dan langsung. Dengarkan pengguna dan lakukan percakapan dua arah."
+                : "You are Jarvis, a friendly, intelligent, responsive personal AI assistant. Speak naturally and concisely in English. Listen carefully and maintain a real two-way conversation."
+            }]
+          }
+        }
+      }));
+    };
+
+    liveSocket.onmessage = event => {
+      let packet;
+      try { packet = JSON.parse(event.data); } catch (error) { return; }
+
+      if (packet.setupComplete) {
+        liveReady = true;
+        liveStarting = false;
+        updateMicUI(true);
+        micButton.title = language === "id" ? "Akhiri percakapan suara" : "End voice conversation";
+        startLiveAudioCapture();
+        if (livePlaybackContext) livePlaybackContext.resume().catch(() => {});
+        return;
+      }
+
+      const content = packet.serverContent;
+      if (!content) return;
+
+      if (content.inputTranscription?.text) {
+        appendLiveTranscript("user", content.inputTranscription.text);
+      }
+      if (content.outputTranscription?.text) {
+        appendLiveTranscript("assistant", content.outputTranscription.text);
+      }
+      if (content.modelTurn?.parts) {
+        for (const part of content.modelTurn.parts) {
+          if (part.inlineData?.data) playGeminiLiveAudio(part.inlineData.data);
+          if (part.text) appendLiveTranscript("assistant", part.text);
+        }
+      }
+      if (content.turnComplete) {
+        liveLastTranscriptRole = "";
+        liveUserTranscriptMessage = null;
+        liveAssistantTranscriptMessage = null;
+      }
+      if (content.interrupted && livePlaybackContext) {
+        nextLivePlaybackTime = livePlaybackContext.currentTime;
+      }
+    };
+
+    liveSocket.onerror = () => {
+      if (liveStarting || liveReady) {
+        alert(language === "id" ? "Koneksi STS gagal. Coba mulai lagi." : "STS connection failed. Please try again.");
+      }
+      stopLiveConversation();
+    };
+    liveSocket.onclose = event => {
+      if (liveReady || liveStarting) {
+        if (event.code !== 1000) {
+          console.warn("Gemini Live closed:", event.code, event.reason);
+        }
+        stopLiveConversation();
+      }
+    };
+  } catch (error) {
+    console.error("Jarvis STS error:", error);
+    await stopLiveConversation();
+    alert(error.message || (language === "id" ? "Tidak dapat memulai STS." : "Could not start STS."));
+  } finally {
+    micButton.disabled = false;
+    liveStarting = false;
+  }
+}
+
+/* STS replaces browser SpeechRecognition and TTS for voice conversations. */
+speakJarvis = function() {};
+if (recognition) {
+  try { recognition.abort(); } catch (error) {}
+  recognition = null;
+}
+voiceToggle.onclick = () => {
+  voiceEnabled = !voiceEnabled;
+  localStorage.setItem("jarvis-voice-enabled", String(voiceEnabled));
+  updateVoiceButton();
+  if (!voiceEnabled && livePlaybackContext) {
+    livePlaybackContext.suspend().catch(() => {});
+  } else if (voiceEnabled && livePlaybackContext) {
+    livePlaybackContext.resume().catch(() => {});
+  }
+};
+micButton.onclick = () => {
+  if (liveSocket || liveStream || liveStarting) {
+    stopLiveConversation();
+  } else {
+    startLiveConversation();
+  }
+};
+$("mode-select").addEventListener("change", () => {
+  if (liveSocket || liveStream || liveStarting) stopLiveConversation();
+});
+$("language-select").addEventListener("change", () => {
+  if (liveSocket || liveStream || liveStarting) stopLiveConversation();
+});
+
 applyLanguage();
 renderMessages();
 updateHistory();
