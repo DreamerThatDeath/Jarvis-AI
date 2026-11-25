@@ -729,11 +729,8 @@ footer {
       <span>Login Akun</span>
       <button id="login-close">×</button>
     </div>
-    <input type="email" id="login-email" class="login-input" placeholder="Email">
-    <input type="password" id="login-password" class="login-input" placeholder="Password">
-    <button class="login-btn" id="do-login">Masuk</button>
     <button class="login-google" id="google-login">Login dengan Google</button>
-    <div class="login-note">Login untuk sinkronisasi chat & fitur lanjutan.</div>
+    <div class="login-note">Login Google untuk sinkronisasi chat. Chat lokal tetap tersimpan di perangkat ini.</div>
   </section>
 
   <main>
@@ -823,6 +820,37 @@ let currentMode = "cowok";
 let isLoggedIn = false;
 let currentUser = null;
 let pendingFile = null;
+
+// Local chat persistence. Logged-out chats stay on this device.
+const CHAT_STORAGE_KEY = "jarvis-chat-data-v1";
+function saveChats() {
+  try {
+    const payload = {
+      chats: chats.slice(0, 60),
+      currentChatId: currentChat ? currentChat.id : null,
+      nextChatId,
+      pinnedChats: [...pinnedChats]
+    };
+    localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(payload));
+    return true;
+  } catch (error) {
+    console.warn("Jarvis chat storage is full:", error);
+    return false;
+  }
+}
+function loadChats() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(CHAT_STORAGE_KEY) || "null");
+    if (!saved || !Array.isArray(saved.chats)) return;
+    chats = saved.chats.filter(chat => chat && chat.id != null && Array.isArray(chat.messages)).slice(0, 60);
+    nextChatId = Math.max(Number(saved.nextChatId) || 1, ...chats.map(chat => Number(chat.id) + 1 || 1));
+    pinnedChats = new Set(Array.isArray(saved.pinnedChats) ? saved.pinnedChats : []);
+    currentChat = chats.find(chat => String(chat.id) === String(saved.currentChatId)) || chats[0] || null;
+  } catch (error) {
+    console.warn("Could not restore Jarvis chats:", error);
+  }
+}
+loadChats();
 
 const translations = {
   id: {
@@ -1001,26 +1029,16 @@ $("mode-select").value = currentMode;
 
 /* Login */
 function updateLoginUI() {
-  if (isLoggedIn && currentUser) {
-    const name = currentUser.name || currentUser.email.split("@")[0];
-    $("login-name").textContent = name;
-    $("login-sub").textContent = currentUser.email || "";
-    $("login-avatar").textContent = name.charAt(0).toUpperCase();
-  } else {
-    $("login-name").textContent = "Login Akun";
-    $("login-sub").textContent = t("notLogged");
-    $("login-avatar").textContent = "?";
-  }
+  $("login-name").textContent = isLoggedIn && currentUser ? (currentUser.name || currentUser.email.split("@")[0]) : "Login Akun";
+  $("login-sub").textContent = isLoggedIn && currentUser ? currentUser.email : t("notLogged");
+  $("login-avatar").textContent = isLoggedIn && currentUser ? ($("login-name").textContent.charAt(0).toUpperCase()) : "?";
 }
-
 $("login-button").onclick = (e) => {
   if (e.target.closest("#login-dots")) return;
-
   if (isLoggedIn) {
-    if (confirm(language === "id" ? "Logout dari akun?" : "Logout?")) {
+    if (confirm(language === "id" ? "Logout dari akun?" : "Log out?")) {
       isLoggedIn = false;
       currentUser = null;
-      localStorage.removeItem("jarvis-user");
       updateLoginUI();
     }
   } else {
@@ -1029,29 +1047,11 @@ $("login-button").onclick = (e) => {
   }
 };
 $("login-close").onclick = () => $("login-panel").classList.remove("show");
-
-$("do-login").onclick = () => {
-  const email = $("login-email").value.trim();
-  const pass = $("login-password").value;
-  if (!email || !pass) return alert("Isi email dan password.");
-  isLoggedIn = true;
-  currentUser = { email, name: email.split("@")[0] };
-  localStorage.setItem("jarvis-user", JSON.stringify(currentUser));
-  updateLoginUI();
-  $("login-panel").classList.remove("show");
-  alert(t("loginSuccess"));
-};
 $("google-login").onclick = () => {
-  alert(language === "id" ? "Siap dihubungkan ke Google OAuth (butuh backend)." : "Ready for Google OAuth (backend needed).");
+  alert(language === "id"
+    ? "Google Sign-In dan sinkronisasi cloud belum dikonfigurasi untuk website. Chat kamu saat ini tersimpan di perangkat ini."
+    : "Google Sign-In and cloud sync are not configured for this website yet. Your chats are currently saved on this device.");
 };
-
-try {
-  const saved = JSON.parse(localStorage.getItem("jarvis-user"));
-  if (saved?.email) {
-    isLoggedIn = true;
-    currentUser = saved;
-  }
-} catch(e) {}
 updateLoginUI();
 
 /* ===== JARVIS VOICE: DEEP MALE + CLEAR SPEECH ===== */
@@ -1380,6 +1380,7 @@ function updateHistory() {
     btn.textContent = (pinnedChats.has(chat.id) ? "📌 " : "") + chat.title;
     btn.onclick = () => {
       currentChat = chat;
+      saveChats();
       renderMessages();
       closeMenu();
     };
@@ -1399,6 +1400,7 @@ function updateHistory() {
 function togglePin(chat) {
   if (pinnedChats.has(chat.id)) pinnedChats.delete(chat.id);
   else pinnedChats.add(chat.id);
+  saveChats();
   updateHistory();
 }
 
@@ -1406,6 +1408,7 @@ function createChat() {
   stopJarvisVoice();
   currentChat = { id: nextChatId++, title: t("emptyChat"), messages: [] };
   chats.unshift(currentChat);
+  saveChats();
   renderMessages();
   updateHistory();
   promptBox.value = "";
@@ -1533,6 +1536,7 @@ composer.addEventListener("submit", async e => {
   if (!currentChat) {
     currentChat = { id: nextChatId++, title: (question || "File").slice(0, 35), messages: [] };
     chats.unshift(currentChat);
+    saveChats();
   }
   const chat = currentChat;
   if (chat.messages.length === 0) chat.title = (question || "File").slice(0, 35);
@@ -1545,6 +1549,7 @@ composer.addEventListener("submit", async e => {
     userMessage.image = URL.createObjectURL(fileToSend);
   }
   chat.messages.push(userMessage);
+  saveChats();
 
   const answerMessage = { role: "assistant", text: t("connecting"), mode: currentMode };
   chat.messages.push(answerMessage);
@@ -1578,7 +1583,7 @@ composer.addEventListener("submit", async e => {
         mode: currentMode,
         language,
         model: "gemini-3.8-flash",
-        generate_media: true,
+        generate_media: false,
         history: chat.messages.slice(0, -2)
           .filter(item => (item.role === "user" || item.role === "assistant") && typeof item.text === "string")
           .slice(-12)
@@ -1611,6 +1616,7 @@ composer.addEventListener("submit", async e => {
     composer.dataset.sending = "false";
     sendBtn.disabled = false;
     sendBtn.textContent = "↑";
+    saveChats();
     renderMessages();
     updateHistory();
     if (answerMessage.text !== t("connecting") && answerMessage.text !== t("connectionError")) {
@@ -1710,6 +1716,7 @@ function appendLiveTranscript(role, text) {
     liveAssistantTranscriptMessage.text += text;
   }
   liveLastTranscriptRole = role;
+  saveChats();
   renderMessages();
   updateHistory();
 }
